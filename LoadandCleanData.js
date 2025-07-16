@@ -1,47 +1,57 @@
 /**
- * Runs when the spreadsheet is opened to add our custom menus.
- * @param {GoogleAppsScript.Events.SheetsOnOpen} e The event object (optional).
- */
+ * Runs when the spreadsheet is opened to add our custom menus.
+ * @param {GoogleAppsScript.Events.SheetsOnOpen} e The event object (optional).
+ */
 function onOpen(e) {
-    Logger.log("Master onOpen triggered. AuthMode: " + (e ? e.authMode : 'N/A Event Object'));
+    Logger.log("Master onOpen triggered. AuthMode: " + (e ? e.authMode : 'N/A Event Object'));
 
-    try {
-        // Your original Config menu creation (no change needed here, it still works)
-        SpreadsheetApp.getUi()
-            .createMenu('⚙️ Config') // Changed to include icon for consistency
-            .addItem('Set Directory Spreadsheet URL…', 'showDirectoryDialog') // Changed text for clarity
-            .addToUi();
-        Logger.log("✅ Config menu added by onOpen.");
-    } catch (error) {
-        Logger.log("Error adding Config menu in onOpen: " + error.message + " Stack: " + error.stack);
-    }
+    try {
+        // Your original Config menu creation (no change needed here, it still works)
+        SpreadsheetApp.getUi()
+            .createMenu('⚙️ Config') // Changed to include icon for consistency
+            .addItem('Set Directory Spreadsheet URL…', 'showDirectoryDialog') // Changed text for clarity
+            .addToUi();
+        Logger.log("✅ Config menu added by onOpen.");
+    } catch (error) {
+        Logger.log("Error adding Config menu in onOpen: " + error.message + " Stack: " + error.stack);
+    }
 
-    try {
-        // Call Sunday Service menu (ensure addSundayRegistrationMenu is defined)
-        addSundayRegistrationMenu();
-        Logger.log("Call to addSundayRegistrationMenu completed from onOpen.");
-    } catch (error) {
-        Logger.log("Error during addSundayRegistrationMenu in onOpen: " + error.message + " Stack: " + error.stack);
-    }
+    try {
+        // Call Sunday Service menu (ensure addSundayRegistrationMenu is defined)
+        addSundayRegistrationMenu();
+        Logger.log("Call to addSundayRegistrationMenu completed from onOpen.");
+    } catch (error) {
+        Logger.log("Error during addSundayRegistrationMenu in onOpen: " + error.message + " Stack: " + error.stack);
+    }
 
-    try {
-        // Call Event Registration menu (ensure addEventRegistrationMenu is defined)
-        addEventRegistrationMenu();
-        Logger.log("Call to addEventRegistrationMenu completed from onOpen.");
-    } catch (error) {
-        Logger.log("Error during addEventRegistrationMenu in onOpen: " + error.message + " Stack: " + error.stack);
-    }
+    try {
+        // Call Event Registration menu (ensure addEventRegistrationMenu is defined)
+        addEventRegistrationMenu();
+        Logger.log("Call to addEventRegistrationMenu completed from onOpen.");
+    } catch (error) {
+        Logger.log("Error during addEventRegistrationMenu in onOpen: " + error.message + " Stack: " + error.stack);
+    }
 
-    // Update event attendance counters if the active sheet is the Event Registration sheet on open
+    // --- START: ADD THIS NEW BLOCK ---
     try {
-      const activeSheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-      if (activeSheet && activeSheet.getName() === "Event Registration") {
-        updateEventAttendanceCounts(activeSheet);
-        Logger.log("Event attendance counters updated on open for Event Registration sheet.");
-      }
+        // Call the function to add the User Manual menu
+        addUserManualMenu(); 
+        Logger.log("Call to addUserManualMenu completed from onOpen.");
     } catch (error) {
-      Logger.log("Error updating event attendance counters on open: " + error.message);
+        Logger.log("Error during addUserManualMenu in onOpen: " + error.message + " Stack: " + error.stack);
     }
+    // --- END: ADD THIS NEW BLOCK ---
+
+    // Update event attendance counters if the active sheet is the Event Registration sheet on open
+    try {
+      const activeSheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+      if (activeSheet && activeSheet.getName() === "Event Registration") {
+        updateEventAttendanceCounts(activeSheet);
+        Logger.log("Event attendance counters updated on open for Event Registration sheet.");
+      }
+    } catch (error) {
+      Logger.log("Error updating event attendance counters on open: " + error.message);
+    }
 }
 
 /**
@@ -165,3 +175,31 @@ function getDataFromSheets() {
   Logger.log("✅ All required sheets loaded successfully.");
   return { sData, eData, dData, statsData };
 }
+// ✅ CORRECT: This line should only appear ONCE in your file.
+const userManualUrl = 'https://docs.google.com/document/d/1BF9XVE1mWOHzXpd9dTHRpcuBkq68FaKmXjt1t_qmyMk/edit?usp=sharing';
+
+/**
+ * Creates the 'User Manual' menu in the spreadsheet UI.
+ * This should be called from your onOpen() function.
+ */
+function addUserManualMenu() {
+  try {
+    SpreadsheetApp.getUi()
+      .createMenu('📖 User Manual')
+      .addItem('Open User Manual', 'openManualFromMenu') 
+      .addToUi();
+  } catch (error) {
+    Logger.log("Error adding User Manual menu: " + error.message);
+  }
+}
+
+/**
+ * Opens the user manual URL in a new tab.
+ * This is the function executed when the menu item is clicked.
+ */
+function openManualFromMenu() {
+  const html = `<script>window.open('${userManualUrl}', '_blank'); google.script.host.close();</script>`;
+  const htmlOutput = HtmlService.createHtmlOutput(html);
+  SpreadsheetApp.getUi().showModalDialog(htmlOutput, 'Opening Manual...');
+}
+
