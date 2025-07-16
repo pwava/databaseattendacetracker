@@ -422,3 +422,173 @@ function combineNamesOnFormSubmit(e) {
 // You also need the 'onFormSubmitTransfer(e)' function in your script project.
 // If you don't have it, you'll need to add it separately based on your requirements.
 // function onFormSubmitTransfer(e) { ... }
+
+
+/**
+ * Scans the 'Service Attendance' sheet for rows with a name but no ID.
+ * Fills in the missing ID by either finding an existing one from all data sources
+ * or generating a new one based on the highest available ID.
+ * This is intended to be run manually or on a time-driven trigger.
+ */
+function processServiceAttendanceIds() {
+  const functionStartTime = new Date();
+  Logger.log('processServiceAttendanceIds script started.');
+
+  // --- Configuration ---
+  // These must match the sheets used for the master ID map in your other functions to ensure consistency
+  const SUNDAY_SERVICE_SHEET_NAME = 'sunday service';
+  const EVENT_ATTENDANCE_SHEET_NAME = 'Event attendance';
+  const SUNDAY_REGISTRATION_SHEET_NAME = 'sunday registration';
+  const EVENT_REGISTRATION_SHEET_NAME = 'event registration';
+  const DIRECTORY_TAB_NAME = 'directory';
+  const NEW_MEMBER_FORM_TAB_NAME = 'new member form';
+  const TARGET_SHEET_NAME = 'Service Attendance'; // The sheet we are processing
+  const ATTENDANCE_STATS_SHEET_NAME = 'attendance stats'; // ADDED a new source sheet
+
+  const ID_COLUMN = 1;      // Personal ID is in Column A
+  const NAME_COLUMN = 2;    // Full Name is in Column B
+
+  // --- Get Spreadsheet Objects ---
+  const currentSs = SpreadsheetApp.getActiveSpreadsheet();
+  let directorySs;
+  let DIRECTORY_SPREADSHEET_ID;
+  try {
+    // This relies on your existing getDirectorySpreadsheetIdFromProperties() helper function
+    DIRECTORY_SPREADSHEET_ID = getDirectorySpreadsheetIdFromProperties();
+    directorySs = SpreadsheetApp.openById(DIRECTORY_SPREADSHEET_ID);
+  } catch (err) {
+    Logger.log(`Error opening directory spreadsheet (ID: ${DIRECTORY_SPREADSHEET_ID || 'not set'}): ${err.toString()}. Some ID data might be incomplete.`);
+    directorySs = null; // Allow script to continue with a warning
+  }
+
+  // --- Build Master ID Map & Find Highest ID (Consistent Logic) ---
+  Logger.log('Fetching data from all source sheets for ID processing...');
+  // This logic is reused from your original function to ensure consistency across your entire system.
+  // It reads all relevant sheets to build a complete picture of all people and their IDs.
+  const allSheetNames = [
+      SUNDAY_SERVICE_SHEET_NAME,
+      EVENT_ATTENDANCE_SHEET_NAME,
+      SUNDAY_REGISTRATION_SHEET_NAME,
+      EVENT_REGISTRATION_SHEET_NAME,
+      DIRECTORY_TAB_NAME,
+      NEW_MEMBER_FORM_TAB_NAME,
+      TARGET_SHEET_NAME, // We also read the target sheet itself
+      ATTENDANCE_STATS_SHEET_NAME // ADDED the new sheet name to the list
+  ];
+  const allDataSources = [
+    getSheetData(currentSs, SUNDAY_SERVICE_SHEET_NAME),
+    getSheetData(currentSs, EVENT_ATTENDANCE_SHEET_NAME),
+    getSheetData(currentSs, SUNDAY_REGISTRATION_SHEET_NAME),
+    getSheetData(currentSs, EVENT_REGISTRATION_SHEET_NAME),
+    directorySs ? getSheetData(directorySs, DIRECTORY_TAB_NAME) : [],
+    directorySs ? getSheetData(directorySs, NEW_MEMBER_FORM_TAB_NAME) : [],
+    getSheetData(currentSs, TARGET_SHEET_NAME),
+    getSheetData(currentSs, ATTENDANCE_STATS_SHEET_NAME) // ADDED the new sheet's data
+  ];
+  
+  Logger.log('Calculating highest existing numeric ID and building master map...');
+  let highestExistingNumber = 0;
+  const masterNameIdMap = new Map();
+
+  allDataSources.forEach((data, index) => {
+    const sheetNameForLog = allSheetNames[index];
+    if (!data || data.length === 0) {
+      Logger.log(`No data from "${sheetNameForLog}" to process.`);
+      return;
+    }
+    // Start from i = 1 to skip header row
+    for (let i = 1; i < data.length; i++) {
+      const row = data[i];
+      if (row && row.length >= NAME_COLUMN) {
+        const idCell = row[ID_COLUMN - 1];
+        const nameCell = row[NAME_COLUMN - 1];
+
+        // Update highest number using your helper function
+        if (idCell !== null && idCell !== undefined && String(idCell).trim() !== "") {
+          const number = extractNumberFromId(String(idCell));
+          if (!isNaN(number)) {
+            highestExistingNumber = Math.max(highestExistingNumber, number);
+          }
+        }
+
+        // Populate map
+        if (nameCell && String(nameCell).trim() !== "" && idCell !== null && idCell !== undefined && String(idCell).trim() !== "") {
+          masterNameIdMap.set(String(nameCell).trim().toUpperCase(), String(idCell).trim());
+        }
+      }
+    }
+    Logger.log(`After scanning "${sheetNameForLog}", max ID is ${highestExistingNumber} and map size is ${masterNameIdMap.size}`);
+  });
+
+  Logger.log(`Final initial highest ID: ${highestExistingNumber}. Final map size: ${masterNameIdMap.size}.`);
+
+  // --- Process the 'Service Attendance' Sheet ---
+  const targetSheet = currentSs.getSheetByName(TARGET_SHEET_NAME);
+  if (!targetSheet) {
+    const errorMsg = `Error: Sheet "${TARGET_SHEET_NAME}" not found.`;
+    Logger.log(`CRITICAL: ${errorMsg} Exiting.`);
+    SpreadsheetApp.getUi().alert(errorMsg);
+    return;
+  }
+
+  const targetSheetData = targetSheet.getDataRange().getValues();
+  const updatesToWrite = [];
+
+  Logger.log(`Scanning ${targetSheetData.length - 1} data rows from "${TARGET_SHEET_NAME}" for missing IDs...`);
+
+  // Loop through data, starting from row 2 (index 1) to skip header
+  for (let i = 1; i < targetSheetData.length; i++) {
+    const sheetRowNumber = i + 1; // 1-based index for sheet rows
+    const rowData = targetSheetData[i];
+    const existingId = rowData[ID_COLUMN - 1];
+    const currentName = rowData[NAME_COLUMN - 1];
+
+    // This is the main condition: Process row only if ID is blank AND Name is present
+    if ((existingId === null || String(existingId).trim() === "") && (currentName !== null && String(currentName).trim() !== "")) {
+      const formattedName = String(currentName).trim().toUpperCase();
+      let determinedId = "";
+
+      if (masterNameIdMap.has(formattedName)) {
+        // Name found in the master map, use the existing ID
+        determinedId = masterNameIdMap.get(formattedName);
+        Logger.log(`Row ${sheetRowNumber}: Name "${currentName}" found. Assigning existing ID: "${determinedId}".`);
+      } else {
+        // Name is new, generate a new ID
+        highestExistingNumber++;
+        determinedId = String(highestExistingNumber);
+        Logger.log(`Row ${sheetRowNumber}: Name "${currentName}" is new. Generating new ID: "${determinedId}".`);
+        // Add the new person to the map for this run to avoid assigning them another new ID if they appear again
+        masterNameIdMap.set(formattedName, determinedId);
+      }
+
+      // Add this update to our batch list for efficient writing
+      updatesToWrite.push({ row: sheetRowNumber, id: determinedId });
+    }
+  }
+
+  // --- Write All Updates to the Sheet at Once ---
+  if (updatesToWrite.length > 0) {
+    Logger.log(`Attempting to write ${updatesToWrite.length} ID updates to "${TARGET_SHEET_NAME}".`);
+    let successCount = 0;
+    updatesToWrite.forEach(update => {
+      try {
+        targetSheet.getRange(update.row, ID_COLUMN).setValue(update.id);
+        successCount++;
+      } catch (err) {
+        Logger.log(`Error writing ID "${update.id}" to row ${update.row}: ${err.toString()}`);
+      }
+    });
+    SpreadsheetApp.flush(); // Ensure all changes are saved
+    const message = `${successCount} of ${updatesToWrite.length} missing IDs have been successfully filled in on the "${TARGET_SHEET_NAME}" sheet.`;
+    Logger.log(message);
+    SpreadsheetApp.getUi().alert(message);
+  } else {
+    const message = `No rows needed updates on the "${TARGET_SHEET_NAME}" sheet.`;
+    Logger.log(message);
+    SpreadsheetApp.getUi().alert(message);
+  }
+
+  const functionEndTime = new Date();
+  const duration = (functionEndTime.getTime() - functionStartTime.getTime()) / 1000;
+  Logger.log(`processServiceAttendanceIds script finished. Duration: ${duration} seconds.`);
+}
