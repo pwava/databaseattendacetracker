@@ -225,7 +225,8 @@ function getServiceAttendanceData() {
   }
 
   const lastRow = sheet.getLastRow();
-  const lastColumn = sheet.getLastColumn();
+  // We only need data up to Column E for this function's purpose
+  const lastColumn = Math.max(sheet.getLastColumn(), 5); 
 
   if (lastRow <= 1) {
     Logger.log(`⚠️ No data found in "${sheetName}" sheet (only header row or empty data range).`);
@@ -233,9 +234,12 @@ function getServiceAttendanceData() {
   }
 
   const dataRange = sheet.getRange(2, 1, lastRow - 1, lastColumn);
-  const data = dataRange.getValues();
+  // --- CHANGED HERE ---
+  // Using getDisplayValues() reads the date as a string (e.g., "7/13/2025")
+  // instead of a Date object, which prevents timezone shifting.
+  const data = dataRange.getDisplayValues();
 
-  Logger.log(`✅ Retrieved ${data.length} rows from "${sheetName}" sheet.`);
+  Logger.log(`✅ Retrieved ${data.length} rows (as display values) from "${sheetName}" sheet.`);
   return data;
 }
 
@@ -284,7 +288,8 @@ function getDataFromSheets() {
   };
 
   return {
-    dData: externalDirectorySs ? getSheetData("Sunday Registration", externalDirectorySs) : [],
+    // This is the new, corrected line
+dData: externalDirectorySs ? getSheetData("Directory", externalDirectorySs) : [],
     eData: getSheetData("Event Attendance", ss),
     sData: getSheetData("Service Attendance", ss)
   };
@@ -333,239 +338,249 @@ function getExistingAttendanceStatsCounts() {
 
 
 /**
- * Calculates attendance statistics based on formatted raw data.
- * Groups entries by BEL code and summarizes attendance
- * for the current month, quarter, and year,
- * including volunteer instances and last attended date.
- *
- * @returns {Array<Array<any>>} An array of arrays containing summarized attendance statistics per individual, or empty array if no data to process.
- */
+ * Calculates attendance statistics based on formatted raw data.
+ * Groups entries by BEL code and summarizes attendance
+ * for the current month, the last 3 months, and year,
+ * including volunteer instances and last attended date.
+ *
+ * @returns {Array<Array<any>>} An array of arrays containing summarized attendance statistics per individual, or empty array if no data to process.
+ */
 function calculateAttendanceStats() {
-  const rawData = matchOrAssignBelCodes();
+  const rawData = matchOrAssignBelCodes();
 
-  if (!rawData || rawData.length === 0) {
-    Logger.log("❌ No data received from matchOrAssignBelCodes or data is empty after formatting.");
-    return [];
-  }
+  if (!rawData || rawData.length === 0) {
+    Logger.log("❌ No data received from matchOrAssignBelCodes or data is empty after formatting.");
+    return [];
+  }
 
-  const now = new Date();
-  const currentMonth = now.getMonth();
-  const currentQuarter = Math.floor(currentMonth / 3);
-  const currentYear = now.getFullYear();
+  const now = new Date();
+  const currentMonth = now.getMonth();
+  // const currentQuarter = Math.floor(currentMonth / 3); // No longer used for fixed quarter.
+  const currentYear = now.getFullYear();
 
-  const previousCalendarYear = currentYear - 1;
-  Logger.log(`Debug: Calculating last year's attendance for calendar year: ${previousCalendarYear}`);
+  // --- MODIFICATION: Define the start date for the "last 3 months" period ---
+  // This creates a rolling 3-month window from the current date.
+  const threeMonthsAgo = new Date(now);
+  threeMonthsAgo.setMonth(now.getMonth() - 3);
+  Logger.log(`ℹ️ Calculating "quarterly" events for the last 3 months, starting from: ${threeMonthsAgo.toDateString()}`);
+  // --- END MODIFICATION ---
 
-  const serviceAttendanceData = getServiceAttendanceData();
-  const serviceAttendanceLastYear = new Map(); // Map: Person ID (numeric) -> Set of unique date strings (YYYY-MM-DD)
+  const previousCalendarYear = currentYear - 1;
+  Logger.log(`Debug: Calculating last year's attendance for calendar year: ${previousCalendarYear}`);
 
+  const serviceAttendanceData = getServiceAttendanceData();
+  const serviceAttendanceLastYear = new Map(); // Map: Person ID (numeric) -> Set of unique date strings (YYYY-MM-DD)
+
+ // --- NEW LOGIC TO HANDLE DATE STRINGS ---
   if (serviceAttendanceData && serviceAttendanceData.length > 0) {
     serviceAttendanceData.forEach(row => {
       const personId = extractNumericBel(row[0]);
-      const dateStr = row[4];
+      // row[4] is now a string like "7/13/2025" thanks to getDisplayValues()
+      const dateString = row[4]; 
 
-      let serviceDate;
-      if (dateStr instanceof Date) {
-        serviceDate = dateStr;
-      } else if (typeof dateStr === 'number') {
-        serviceDate = new Date((dateStr - (25567 + 2)) * 86400 * 1000);
-      } else {
-        serviceDate = new Date(String(dateStr));
-      }
-
-      if (isNaN(serviceDate.getTime())) {
-        Logger.log(`⚠️ Service Attendance: Skipping invalid date "${dateStr}" for Person ID ${row[0]}.`);
+      if (personId === null || !dateString) {
+        // Skip if there's no ID or the date cell is empty
         return;
       }
 
-      if (personId !== null && serviceDate.getFullYear() === previousCalendarYear) {
+      // Parse the year directly from the string to avoid timezone issues.
+      // This assumes a date format like MM/DD/YYYY or M/D/YYYY.
+      const dateParts = dateString.split('/');
+      if (dateParts.length !== 3) {
+        Logger.log(`⚠️ Service Attendance: Skipping date with unexpected format "${dateString}" for Person ID ${row[0]}.`);
+        return;
+      }
+      
+      const serviceYear = parseInt(dateParts[2], 10);
+      if (isNaN(serviceYear)) {
+         Logger.log(`⚠️ Service Attendance: Could not parse year from date "${dateString}" for Person ID ${row[0]}.`);
+         return;
+      }
+
+      // Check if the parsed year is the one we're looking for
+      if (serviceYear === previousCalendarYear) {
         if (!serviceAttendanceLastYear.has(personId)) {
           serviceAttendanceLastYear.set(personId, new Set());
         }
-        const uniqueDateKey = serviceDate.toISOString().split('T')[0];
-        serviceAttendanceLastYear.get(personId).add(uniqueDateKey);
+        // Add the original date string as the unique key. It's already unique for a given day.
+        serviceAttendanceLastYear.get(personId).add(dateString);
       }
     });
   }
+  // --- END OF NEW LOGIC ---
   Logger.log(`✅ Processed Service Attendance for previous calendar year (${previousCalendarYear}). Found data for ${serviceAttendanceLastYear.size} individuals.`);
+  Logger.log(`✅ Processed Service Attendance for previous calendar year (${previousCalendarYear}). Found data for ${serviceAttendanceLastYear.size} individuals.`);
 
-  const existingStatsFromSheet = getExistingAttendanceStatsCounts(); // Renamed for clarity
+  const existingStatsFromSheet = getExistingAttendanceStatsCounts(); // Renamed for clarity
 
-  const grouped = new Map();
+  const grouped = new Map();
 
-  rawData.forEach(row => {
-    if (row.length < 11) {
-      Logger.log(`⚠️ calculateAttendanceStats: Skipping row due to insufficient columns (${row.length} found). Expected at least 11. Row data (partial): ${JSON.stringify(row.slice(0, 11))}`);
-      return;
-    }
+  rawData.forEach(row => {
+    if (row.length < 11) {
+      Logger.log(`⚠️ calculateAttendanceStats: Skipping row due to insufficient columns (${row.length} found). Expected at least 11. Row data (partial): ${JSON.stringify(row.slice(0, 11))}`);
+      return;
+    }
 
-    const bel = row[0];
-    const name = row[1];
-    const eventName = row[2];
-    const eventId = row[3];
-    const role = row[9];
-    const dateStr = row[10];
+    const bel = row[0];
+    const name = row[1];
+    const eventName = row[2];
+    const eventId = row[3];
+    const role = row[9];
+    const dateStr = row[10];
 
-    let date;
-    if (dateStr instanceof Date) {
-      date = dateStr;
-    } else if (typeof dateStr === 'number') {
-      date = new Date((dateStr - (25567 + 2)) * 86400 * 1000);
-    } else {
-      date = new Date(String(dateStr));
-    }
+    let date;
+    if (dateStr instanceof Date) {
+      date = dateStr;
+    } else if (typeof dateStr === 'number') {
+      date = new Date((dateStr - (25567 + 2)) * 86400 * 1000);
+    } else {
+      date = new Date(String(dateStr));
+    }
 
-    if (isNaN(date.getTime())) {
-      Logger.log(`⚠️ Skipping invalid date: "${dateStr}" found for BEL ${bel}. Full row data: ${JSON.stringify(row)}`);
-      return;
-    }
+    if (isNaN(date.getTime())) {
+      Logger.log(`⚠️ Skipping invalid date: "${dateStr}" found for BEL ${bel}. Full row data: ${JSON.stringify(row)}`);
+      return;
+    }
 
-    const isSundayService = typeof eventName === 'string' && /sunday service/i.test(eventName);
-    const isVolunteer = typeof role === 'string' && String(role).toLowerCase().includes("volunteer");
-    const eventNameKey = typeof eventName === 'string' ? eventName : 'UnknownEvent';
-    const eventIdKey = typeof eventId === 'string' ? eventId : 'UnknownID';
-    const eventKey = isSundayService ? `sunday service-${date.toDateString()}` : `${eventNameKey}-${eventIdKey}`;
+    const isSundayService = typeof eventName === 'string' && /sunday service/i.test(eventName);
+    const isVolunteer = typeof role === 'string' && String(role).toLowerCase().includes("volunteer");
+    const eventNameKey = typeof eventName === 'string' ? eventName : 'UnknownEvent';
+    const eventIdKey = typeof eventId === 'string' ? eventId : 'UnknownID';
+    const eventKey = isSundayService ? `sunday service-${date.toDateString()}` : `${eventNameKey}-${eventIdKey}`;
 
-    const record = {
-      name,
-      date,
-      eventKey,
-      month: date.getMonth(),
-      quarter: Math.floor(date.getMonth() / 3),
-      year: date.getFullYear(),
-      isVolunteer,
-      isSundayService,
-    };
+    const record = {
+      name,
+      date,
+      eventKey,
+      month: date.getMonth(),
+      quarter: Math.floor(date.getMonth() / 3),
+      year: date.getFullYear(),
+      isVolunteer,
+      isSundayService,
+    };
 
-    const belString = String(bel);
-    if (!grouped.has(belString)) {
-      grouped.set(belString, []);
-    }
-    grouped.get(belString).push(record);
-  });
+    const belString = String(bel);
+    if (!grouped.has(belString)) {
+      grouped.set(belString, []);
+    }
+    grouped.get(belString).push(record);
+  });
 
-  const summary = [];
+  const summary = [];
 
-  grouped.forEach((records, bel) => {
-    const uniqueEvents = new Set();
-    const monthEvents = new Set();
-    const quarterEvents = new Set();
-    let volunteerCount = 0;
+  grouped.forEach((records, bel) => {
+    const uniqueEvents = new Set();
+    const monthEvents = new Set();
+    const quarterEvents = new Set();
+    let volunteerCount = 0;
 
-    records.forEach(r => {
-      uniqueEvents.add(r.eventKey);
-      if (r.year === currentYear && r.month === currentMonth) {
-        monthEvents.add(r.eventKey);
-      }
-      if (r.year === currentYear && r.quarter === currentQuarter) {
-        quarterEvents.add(r.eventKey);
-      }
-      if (r.isVolunteer && r.year === currentYear) {
-        volunteerCount++;
-      }
-    });
+    records.forEach(r => {
+      uniqueEvents.add(r.eventKey);
+      if (r.year === currentYear && r.month === currentMonth) {
+        monthEvents.add(r.eventKey);
+      }
+      // --- MODIFICATION: Check if the event date is within the last 3 months ---
+      if (r.date >= threeMonthsAgo) {
+        quarterEvents.add(r.eventKey);
+      }
+      // --- END MODIFICATION ---
+      if (r.isVolunteer && r.year === currentYear) {
+        volunteerCount++;
+      }
+    });
 
-    records.sort((a, b) => b.date.getTime() - a.date.getTime());
-    const mostRecentRecord = records.length > 0 ? records[0] : null;
+    records.sort((a, b) => b.date.getTime() - a.date.getTime());
+    const mostRecentRecord = records.length > 0 ? records[0] : null;
 
-    let fullName = '';
-    let lastDate = '';
-    let lastEventName = '';
+    let fullName = '';
+    let lastDate = '';
+    let lastEventName = '';
 
-    if (mostRecentRecord) {
-      fullName = mostRecentRecord.name;
-      lastDate = mostRecentRecord.date;
-      const lastEventKey = mostRecentRecord.eventKey;
-      const lastEventParts = lastEventKey.split('-');
-      lastEventName = lastEventParts.length > 0 ? lastEventParts[0] : lastEventKey;
-    }
+    if (mostRecentRecord) {
+      fullName = mostRecentRecord.name;
+      lastDate = mostRecentRecord.date;
+      const lastEventKey = mostRecentRecord.eventKey;
+      const lastEventParts = lastEventKey.split('-');
+      lastEventName = lastEventParts.length > 0 ? lastEventParts[0] : lastEventKey;
+    }
 
-    const totalUniqueEvents = uniqueEvents.size;
+    const totalUniqueEvents = uniqueEvents.size;
 
-    const belAsNumber = extractNumericBel(bel);
-    let lastYearServiceCount = 0;
+    const belAsNumber = extractNumericBel(bel);
+    let lastYearServiceCount = 0;
 
-    if (belAsNumber !== null && serviceAttendanceLastYear.has(belAsNumber)) {
-      lastYearServiceCount = serviceAttendanceLastYear.get(belAsNumber).size;
-    } else if (belAsNumber === null) {
-      Logger.log(`⚠️ Person ID (BEL from match script) "${bel}" is not a valid numeric ID. Last Year Service Attendance will be 0 for "${fullName}".`);
-    } else {
-       Logger.log(`ℹ️ No last year service attendance found for Person ID ${belAsNumber} ("${fullName}") for calendar year ${previousCalendarYear}. Count will be 0.`);
-    }
+    if (belAsNumber !== null && serviceAttendanceLastYear.has(belAsNumber)) {
+      lastYearServiceCount = serviceAttendanceLastYear.get(belAsNumber).size;
+    } else if (belAsNumber === null) {
+      Logger.log(`⚠️ Person ID (BEL from match script) "${bel}" is not a valid numeric ID. Last Year Service Attendance will be 0 for "${fullName}".`);
+    } else {
+       Logger.log(`ℹ️ No last year service attendance found for Person ID ${belAsNumber} ("${fullName}") for calendar year ${previousCalendarYear}. Count will be 0.`);
+    }
 
-    // --- NEW ADDITION: Define current calculated stats variables for logging and summary push ---
-    const _currentQuarterValue = quarterEvents.size;
-    const _currentMonthValue = monthEvents.size;
-    const _currentVolunteerValue = volunteerCount;
-    const _currentTotalValue = totalUniqueEvents;
-    const _currentLastYearServiceCountValue = lastYearServiceCount;
-    const _currentLastDateFormattedValue = lastDate instanceof Date ? Utilities.formatDate(lastDate, Session.getScriptTimeZone(), "MM/dd/yyyy") : String(lastDate || '');
-    const _currentLastEventValue = lastEventName; // This is the raw string
-    // --- END NEW ADDITION ---
+    const _currentQuarterValue = quarterEvents.size;
+    const _currentMonthValue = monthEvents.size;
+    const _currentVolunteerValue = volunteerCount;
+    const _currentTotalValue = totalUniqueEvents;
+    const _currentLastYearServiceCountValue = lastYearServiceCount;
+    const _currentLastDateFormattedValue = lastDate instanceof Date ? Utilities.formatDate(lastDate, Session.getScriptTimeZone(), "MM/dd/yyyy") : String(lastDate || '');
+    const _currentLastEventValue = lastEventName;
 
-    // --- NEW ADDITION: Detailed Logging for ALL updates ---
-    if (belAsNumber !== null) {
-      const oldStats = existingStatsFromSheet.get(belAsNumber);
+    if (belAsNumber !== null) {
+      const oldStats = existingStatsFromSheet.get(belAsNumber);
 
-      if (!oldStats) {
-        // New record
-        Logger.log(`✨ NEW RECORD: Person ID ${belAsNumber} ("${fullName}") has been added.`);
-        Logger.log(`   Counts: Q:${_currentQuarterValue} M:${_currentMonthValue} V:${_currentVolunteerValue} Total:${_currentTotalValue} LastYear:${_currentLastYearServiceCountValue}`);
-        Logger.log(`   Last Attended: ${_currentLastDateFormattedValue} (${_currentLastEventValue})`);
+      if (!oldStats) {
+        Logger.log(`✨ NEW RECORD: Person ID ${belAsNumber} ("${fullName}") has been added.`);
+        Logger.log(`   Counts: Q:${_currentQuarterValue} M:${_currentMonthValue} V:${_currentVolunteerValue} Total:${_currentTotalValue} LastYear:${_currentLastYearServiceCountValue}`);
+        Logger.log(`   Last Attended: ${_currentLastDateFormattedValue} (${_currentLastEventValue})`);
 
-      } else {
-        let changes = [];
-        if (oldStats.quarter !== _currentQuarterValue) changes.push(`Q:${oldStats.quarter} -> ${_currentQuarterValue}`);
-        if (oldStats.month !== _currentMonthValue) changes.push(`M:${oldStats.month} -> ${_currentMonthValue}`);
-        if (oldStats.volunteer !== _currentVolunteerValue) changes.push(`V:${oldStats.volunteer} -> ${_currentVolunteerValue}`);
-        if (oldStats.total !== _currentTotalValue) changes.push(`Total:${oldStats.total} -> ${_currentTotalValue}`);
-        if (oldStats.lastYearServiceCount !== _currentLastYearServiceCountValue) changes.push(`LastYear:${oldStats.lastYearServiceCount} -> ${_currentLastYearServiceCountValue}`);
+      } else {
+        let changes = [];
+        if (oldStats.quarter !== _currentQuarterValue) changes.push(`Q:${oldStats.quarter} -> ${_currentQuarterValue}`);
+        if (oldStats.month !== _currentMonthValue) changes.push(`M:${oldStats.month} -> ${_currentMonthValue}`);
+        if (oldStats.volunteer !== _currentVolunteerValue) changes.push(`V:${oldStats.volunteer} -> ${_currentVolunteerValue}`);
+        if (oldStats.total !== _currentTotalValue) changes.push(`Total:${oldStats.total} -> ${_currentTotalValue}`);
+        if (oldStats.lastYearServiceCount !== _currentLastYearServiceCountValue) changes.push(`LastYear:${oldStats.lastYearServiceCount} -> ${_currentLastYearServiceCountValue}`);
+        
+        const oldLastDateFormatted = oldStats.lastDate instanceof Date ? Utilities.formatDate(oldStats.lastDate, Session.getScriptTimeZone(), "MM/dd/yyyy") : String(oldStats.lastDate || '');
+        if (oldLastDateFormatted !== _currentLastDateFormattedValue) changes.push(`LastDate:'${oldLastDateFormatted}' -> '${_currentLastDateFormattedValue}'`);
+        if (oldStats.lastEvent !== _currentLastEventValue) changes.push(`LastEvent:'${oldStats.lastEvent}' -> '${_currentLastEventValue}'`);
 
-        // Compare Date objects using getTime() or formatted string for consistency
-        const oldLastDateFormatted = oldStats.lastDate instanceof Date ? Utilities.formatDate(oldStats.lastDate, Session.getScriptTimeZone(), "MM/dd/yyyy") : String(oldStats.lastDate || '');
-        if (oldLastDateFormatted !== _currentLastDateFormattedValue) changes.push(`LastDate:'${oldLastDateFormatted}' -> '${_currentLastDateFormattedValue}'`);
-        if (oldStats.lastEvent !== _currentLastEventValue) changes.push(`LastEvent:'${oldStats.lastEvent}' -> '${_currentLastEventValue}'`);
+        if (changes.length > 0) {
+          Logger.log(`🔄 UPDATED RECORD: Person ID ${belAsNumber} ("${fullName}") had changes:`);
+          changes.forEach(change => Logger.log(`   - ${change}`));
+        }
+      }
+    }
+    
+    Logger.log(`Debug: Person ID (from match script): ${bel}, Full Name: ${fullName}, Last Year Service Attendance Count: ${_currentLastYearServiceCountValue}`);
 
-        if (changes.length > 0) {
-          Logger.log(`🔄 UPDATED RECORD: Person ID ${belAsNumber} ("${fullName}") had changes:`);
-          changes.forEach(change => Logger.log(`   - ${change}`));
-        } else {
-          // If no changes, no specific log unless very verbose debugging is needed
-          // Logger.log(`Debug: Person ID ${belAsNumber} ("${fullName}") stats are unchanged.`);
-        }
-      }
-    }
-    // --- END NEW ADDITION ---
+    summary.push([
+      bel,
+      fullName,
+      "",
+      "",
+      _currentQuarterValue,
+      _currentMonthValue,
+      _currentVolunteerValue,
+      lastDate,
+      lastEventName,
+      _currentTotalValue,
+      _currentLastYearServiceCountValue
+    ]);
+  });
+    
+  summary.sort((a, b) => {
+    const idA = a[0];
+    const idB = b[0];
+    return idA - idB;
+  });
+  Logger.log("✅ Summary data sorted numerically by Person ID.");
 
-    Logger.log(`Debug: Person ID (from match script): ${bel}, Full Name: ${fullName}, Last Year Service Attendance Count: ${_currentLastYearServiceCountValue}`);
+  Logger.log("✅ Attendance stats calculated for: " + summary.length + " individuals.");
 
-    summary.push([
-      bel,
-      fullName,
-      "",
-      "",
-      _currentQuarterValue,
-      _currentMonthValue,
-      _currentVolunteerValue,
-      lastDate, // Pass the raw Date object
-      lastEventName,
-      _currentTotalValue,
-      _currentLastYearServiceCountValue
-    ]);
-  });
-
-  // --- MODIFIED: Sort the summary array NUMERICALLY by Person ID (index 0) ---
-  summary.sort((a, b) => {
-    const idA = a[0]; // Person ID is at index 0
-    const idB = b[0]; // Person ID is at index 0
-    return idA - idB;
-  });
-  Logger.log("✅ Summary data sorted numerically by Person ID.");
-
-  Logger.log("✅ Attendance stats calculated for: " + summary.length + " individuals.");
-
-  return summary;
+  return summary;
 }
+
 
 function updateAttendanceStatsSheet() {
   const finalData = calculateAttendanceStats();
@@ -628,8 +643,12 @@ function updateAttendanceStatsSheet() {
   const numCols = output[0] ? output[0].length : 0;
 
   // Explicitly clear only up to column K (11 columns)
-  const targetNumCols = 11;
-  sheet.getRange(2, 1, sheet.getLastRow(), targetNumCols).clearContent();
+  // Check if sheet has rows to clear before getting range
+  if (sheet.getLastRow() > 1) {
+    const targetNumCols = 11;
+    sheet.getRange(2, 1, sheet.getLastRow() - 1, targetNumCols).clearContent();
+  }
+
 
   // Write the data starting at row 2, column 1
   if (numRows > 0 && numCols > 0) {
@@ -639,4 +658,57 @@ function updateAttendanceStatsSheet() {
     Logger.log(`⚠️ No data to write to 'Attendance Stats' sheet after formatting.`);
   }
 
+  // --- THIS IS THE NEW LINE I'VE ADDED ---
+  // It runs after everything else to tag and highlight guests.
+  tagAndHighlightGuests();
+}
+
+/**
+ * Finds people in the 'Attendance Stats' sheet whose Full Name is not in the Directory,
+ * tags them as guests in Column M, and highlights the cell.
+ * LOGIC CHANGED: Now checks Full Name (Column B) instead of Personal ID.
+ */
+function tagAndHighlightGuests() {
+  // Helper function to normalize names (trim whitespace, make lowercase) for accurate matching
+  const normalize = name => name?.toString().trim().toLowerCase();
+
+  // --- LOGIC CHANGE 1: Get all Full Names from the Directory ---
+  // It now collects a list of names from Column B of your Directory.
+  const directoryData = getDataFromSheets().dData;
+  const directoryNames = new Set();
+  if (directoryData && directoryData.length > 1) {
+    directoryData.slice(1).forEach(row => {
+      const fullName = normalize(row[1]); // Get the name from Column B
+      if (fullName) { // Make sure the name isn't blank
+        directoryNames.add(fullName);
+      }
+    });
+  }
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const statsSheet = ss.getSheetByName("Attendance Stats");
+  if (!statsSheet || statsSheet.getLastRow() <= 1) {
+    Logger.log("⚠️ Cannot tag guests because 'Attendance Stats' sheet is empty or not found.");
+    return;
+  }
+
+  // --- LOGIC CHANGE 2: Read names from the Attendance Stats sheet ---
+  // It now reads Column B (Full Name) to perform the check.
+  const statsRange = statsSheet.getRange(2, 2, statsSheet.getLastRow() - 1, 1);
+  const statsNames = statsRange.getValues();
+
+  statsNames.forEach((row, index) => {
+    const statsFullName = normalize(row[0]); // Get and normalize the name from the row
+    const currentRow = index + 2;
+
+    // --- LOGIC CHANGE 3: The Check ---
+    // If the name from the stats sheet is NOT in the list of directory names, tag them.
+    if (statsFullName && !directoryNames.has(statsFullName)) {
+      const tagCell = statsSheet.getRange(`M${currentRow}`);
+      tagCell.setValue("Guest (need to add in Directory)");
+      tagCell.setBackground("#FFFF00"); // Yellow background
+      tagCell.setFontColor("#000000");  // Black text
+    }
+  });
+   Logger.log("✅ Guest tagging and highlighting complete (checked by Full Name).");
 }
