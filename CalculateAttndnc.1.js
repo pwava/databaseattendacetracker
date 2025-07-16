@@ -664,16 +664,16 @@ function updateAttendanceStatsSheet() {
 }
 
 /**
- * Finds people in the 'Attendance Stats' sheet whose Full Name is not in the Directory,
+ * Finds people in 'Attendance Stats' whose Full Name is not in the Directory,
  * tags them as guests in Column M, and highlights the cell.
- * LOGIC CHANGED: Now checks Full Name (Column B) instead of Personal ID.
+ * This version uses improved name matching and clears old tags.
  */
 function tagAndHighlightGuests() {
-  // Helper function to normalize names (trim whitespace, make lowercase) for accurate matching
-  const normalize = name => name?.toString().trim().toLowerCase();
+  // This improved normalize function handles extra spaces between names for better matching.
+  const normalize = name => name?.toString().trim().toLowerCase().replace(/\s+/g, ' ');
 
-  // --- LOGIC CHANGE 1: Get all Full Names from the Directory ---
-  // It now collects a list of names from Column B of your Directory.
+  // --- Step 1: Get all Full Names from the Directory ---
+  // This part is the same as your original function.
   const directoryData = getDataFromSheets().dData;
   const directoryNames = new Set();
   if (directoryData && directoryData.length > 1) {
@@ -685,6 +685,12 @@ function tagAndHighlightGuests() {
     });
   }
 
+  // Safety check: If for some reason the directory names couldn't be read, stop here.
+  if (directoryNames.size === 0) {
+    Logger.log("WARNING in tagAndHighlightGuests: The list of names from the Directory is empty. Cannot check for guests.");
+    return;
+  }
+
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const statsSheet = ss.getSheetByName("Attendance Stats");
   if (!statsSheet || statsSheet.getLastRow() <= 1) {
@@ -692,23 +698,37 @@ function tagAndHighlightGuests() {
     return;
   }
 
-  // --- LOGIC CHANGE 2: Read names from the Attendance Stats sheet ---
-  // It now reads Column B (Full Name) to perform the check.
-  const statsRange = statsSheet.getRange(2, 2, statsSheet.getLastRow() - 1, 1);
-  const statsNames = statsRange.getValues();
+  // --- Step 2: Read all names from the 'Attendance Stats' sheet at once for efficiency ---
+  const lastRow = statsSheet.getLastRow();
+  const range = statsSheet.getRange(2, 2, lastRow - 1, 12); // Get data from Column B to Column M
+  const values = range.getValues();
 
-  statsNames.forEach((row, index) => {
-    const statsFullName = normalize(row[0]); // Get and normalize the name from the row
-    const currentRow = index + 2;
+  // --- Step 3: Check each name and decide if it's a guest ---
+  values.forEach((row, index) => {
+    const statsFullName = normalize(row[0]); // This is the Full Name from Column B
+    const tagCellIndex = 11; // In our range, Column M is at index 11 (B=0, C=1, ..., M=11)
 
-    // --- LOGIC CHANGE 3: The Check ---
-    // If the name from the stats sheet is NOT in the list of directory names, tag them.
+    // Check if the name exists in the directory
     if (statsFullName && !directoryNames.has(statsFullName)) {
-      const tagCell = statsSheet.getRange(`M${currentRow}`);
-      tagCell.setValue("Guest (need to add in Directory)");
-      tagCell.setBackground("#FFFF00"); // Yellow background
-      tagCell.setFontColor("#000000");  // Black text
+      // It's a GUEST: Name is not in the directory.
+      values[index][tagCellIndex] = "Guest (need to add in Directory)";
+    } else {
+      // It's NOT a GUEST: Name is in the directory, so we clear any old tag.
+      values[index][tagCellIndex] = "";
     }
   });
-   Logger.log("✅ Guest tagging and highlighting complete (checked by Full Name).");
+
+  // --- Step 4: Write all the changes back to the sheet ---
+  // This updates all the values in Column M (tags) at once.
+  range.setValues(values);
+
+  // --- Step 5: Apply formatting based on the new tags ---
+  // This is more efficient than formatting cell by cell.
+  const formatRange = statsSheet.getRange(2, 13, lastRow - 1, 1); // Just Column M
+  const backgrounds = formatRange.getValues().map(cell => {
+    return (cell[0] === "Guest (need to add in Directory)") ? ["#FFFF00"] : [null];
+  });
+  formatRange.setBackgrounds(backgrounds);
+
+  Logger.log("✅ Guest tagging and highlighting complete.");
 }
