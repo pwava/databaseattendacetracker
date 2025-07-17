@@ -491,19 +491,20 @@ const record = {
     });
 
     records.sort((a, b) => b.date.getTime() - a.date.getTime());
-    const mostRecentRecord = records.length > 0 ? records[0] : null;
+   records.sort((a, b) => b.dateForSorting.getTime() - a.dateForSorting.getTime());
+const mostRecentRecord = records.length > 0 ? records[0] : null;
 
-    let fullName = '';
-    let lastDate = '';
-    let lastEventName = '';
+let fullName = '';
+let lastDate = ''; // This will now hold our "as-is" string
+let lastEventName = '';
 
-    if (mostRecentRecord) {
-      fullName = mostRecentRecord.name;
-      lastDate = mostRecentRecord.date;
-      const lastEventKey = mostRecentRecord.eventKey;
-      const lastEventParts = lastEventKey.split('-');
-      lastEventName = lastEventParts.length > 0 ? lastEventParts[0] : lastEventKey;
-    }
+if (mostRecentRecord) {
+  fullName = mostRecentRecord.name;
+  lastDate = mostRecentRecord.displayDate; // Get the "as-is" string
+  const lastEventKey = mostRecentRecord.eventKey;
+  const lastEventParts = lastEventKey.split('-');
+  lastEventName = lastEventParts.length > 0 ? lastEventParts[0] : lastEventKey;
+}
 
     const totalUniqueEvents = uniqueEvents.size;
 
