@@ -422,43 +422,44 @@ function calculateAttendanceStats() {
     }
 
     const bel = row[0];
-    const name = row[1];
-    const eventName = row[2];
-    const eventId = row[3];
-    const role = row[9];
-    const dateStr = row[10];
+const name = row[1];
+const eventName = row[2];
+const eventId = row[3];
+const role = row[9];
+const dateValue = row[10];
 
-    let date;
-    if (dateStr instanceof Date) {
-      date = dateStr;
-    } else if (typeof dateStr === 'number') {
-      date = new Date((dateStr - (25567 + 2)) * 86400 * 1000);
-    } else {
-      date = new Date(String(dateStr));
-    }
+let dateForSorting;
+if (dateValue instanceof Date) {
+  dateForSorting = dateValue;
+} else {
+  dateForSorting = new Date(String(dateValue));
+}
 
-    if (isNaN(date.getTime())) {
-      Logger.log(`⚠️ Skipping invalid date: "${dateStr}" found for BEL ${bel}. Full row data: ${JSON.stringify(row)}`);
-      return;
-    }
+if (isNaN(dateForSorting.getTime())) {
+  Logger.log(`⚠️ Skipping invalid date: "${dateValue}" for BEL ${bel}.`);
+  return;
+}
 
-    const isSundayService = typeof eventName === 'string' && /sunday service/i.test(eventName);
-    const isVolunteer = typeof role === 'string' && String(role).toLowerCase().includes("volunteer");
-    const eventNameKey = typeof eventName === 'string' ? eventName : 'UnknownEvent';
-    const eventIdKey = typeof eventId === 'string' ? eventId : 'UnknownID';
-    const eventKey = isSundayService ? `sunday service-${date.toDateString()}` : `${eventNameKey}-${eventIdKey}`;
+// Create the "as-is" string using UTC to prevent timezone shifts
+const displayDate = Utilities.formatDate(dateForSorting, "UTC", "MM/dd/yyyy");
 
-    const record = {
-      name,
-      date,
-      eventKey,
-      month: date.getMonth(),
-      quarter: Math.floor(date.getMonth() / 3),
-      year: date.getFullYear(),
-      isVolunteer,
-      isSundayService,
-    };
+const isSundayService = typeof eventName === 'string' && /sunday service/i.test(eventName);
+const isVolunteer = typeof role === 'string' && String(role).toLowerCase().includes("volunteer");
+const eventNameKey = typeof eventName === 'string' ? eventName : 'UnknownEvent';
+const eventIdKey = typeof eventId === 'string' ? eventId : 'UnknownID';
+const eventKey = isSundayService ? `sunday service-${displayDate}` : `${eventNameKey}-${eventIdKey}`;
 
+const record = {
+  name,
+  dateForSorting,   // Real Date object for sorting
+  displayDate,      // "As-is" string for final output
+  eventKey,
+  month: dateForSorting.getMonth(),
+  quarter: Math.floor(dateForSorting.getMonth() / 3),
+  year: dateForSorting.getFullYear(),
+  isVolunteer,
+  isSundayService,
+};
     const belString = String(bel);
     if (!grouped.has(belString)) {
       grouped.set(belString, []);
